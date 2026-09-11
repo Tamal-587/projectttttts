@@ -1,0 +1,25 @@
+{
+  "name": "codealpha-taskflow",
+  "version": "1.0.0",
+  "description": "CodeAlpha Full Stack Development Internship - Enterprise Agile Workspace & Project Management Platform",
+  "scripts": {
+    "frontend:dev": "npm run dev --prefix frontend",
+    "frontend:build": "npm run build --prefix frontend",
+    "backend:run": "backend\\venv\\Scripts\\python.exe backend\\manage.py runserver",
+    "backend:test": "backend\\venv\\Scripts\\python.exe backend\\manage.py test taskflow",
+    "backend:seed": "backend\\venv\\Scripts\\python.exe backend\\manage.py seed_demo_data"
+  },
+  "keywords": [
+    "codealpha",
+    "full-stack",
+    "react",
+    "vite",
+    "django",
+    "django-rest-framework",
+    "jwt",
+    "kanban",
+    "agile"
+  ],
+  "author": "CodeAlpha Full Stack Developer Intern",
+  "license": "MIT"
+}
