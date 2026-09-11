@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, Link } from 'react-router-dom';
 import {
+  Rss,
   LayoutDashboard,
   KanbanSquare,
   CheckSquare,
@@ -11,7 +12,7 @@ import {
   ChevronDown,
   Plus,
   Layers,
-  Sparkles,
+  User,
   X
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -24,6 +25,7 @@ export const Sidebar = ({ isOpen, onClose, onOpenNewWorkspace }) => {
   const navigate = useNavigate();
 
   const navItems = [
+    { label: 'Community Feed', path: '/feed', icon: Rss },
     { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
     { label: 'Kanban Board', path: '/board', icon: KanbanSquare },
     { label: 'All Tasks', path: '/tasks', icon: CheckSquare },
@@ -61,14 +63,13 @@ export const Sidebar = ({ isOpen, onClose, onOpenNewWorkspace }) => {
             </div>
             <div>
               <span className="font-bold text-base tracking-tight text-white flex items-center gap-1.5">
-                TaskFlow
+                DevPulse
                 <span className="text-[10px] uppercase font-semibold px-1.5 py-0.2 bg-indigo-500/20 text-indigo-300 rounded border border-indigo-500/30">
                   Pro
                 </span>
               </span>
             </div>
           </div>
-          {/* Mobile close button */}
           <button
             onClick={onClose}
             className="lg:hidden p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
@@ -77,7 +78,7 @@ export const Sidebar = ({ isOpen, onClose, onOpenNewWorkspace }) => {
           </button>
         </div>
 
-        {/* Workspace Selector Popover */}
+        {/* Workspace Selector */}
         <div className="relative px-3 py-3 border-b border-slate-800/60">
           <button
             onClick={() => setWorkspaceMenuOpen(!workspaceMenuOpen)}
@@ -138,7 +139,7 @@ export const Sidebar = ({ isOpen, onClose, onOpenNewWorkspace }) => {
           )}
         </div>
 
-        {/* Main Navigation Links */}
+        {/* Main Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -165,7 +166,11 @@ export const Sidebar = ({ isOpen, onClose, onOpenNewWorkspace }) => {
         {/* User Card & Logout Footer */}
         <div className="p-3 border-t border-slate-800/80 bg-slate-900/50">
           <div className="flex items-center justify-between p-2 rounded-xl bg-slate-800/40 border border-slate-800">
-            <div className="flex items-center gap-2.5 overflow-hidden">
+            <Link
+              to={`/profile/${user?.username}`}
+              onClick={onClose}
+              className="flex items-center gap-2.5 overflow-hidden hover:opacity-80 transition-opacity"
+            >
               {user?.profile?.avatar_url ? (
                 <img
                   src={user.profile.avatar_url}
@@ -182,10 +187,10 @@ export const Sidebar = ({ isOpen, onClose, onOpenNewWorkspace }) => {
                   {user?.first_name ? `${user.first_name} ${user.last_name || ''}` : user?.username}
                 </p>
                 <p className="text-[10px] text-slate-400 truncate">
-                  {user?.email}
+                  @{user?.username}
                 </p>
               </div>
-            </div>
+            </Link>
 
             <button
               onClick={handleLogout}

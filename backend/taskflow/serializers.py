@@ -1,26 +1,44 @@
 """
-DRF Serializers for CodeAlpha_TaskFlow.
-Handles incoming data validation, nested representations, and business logic.
+DRF Serializers for CodeAlpha Developer Social & TaskFlow Platform.
+Handles data validation, serialization for Auth, Posts, Likes, Comments, Follows, Workspaces, and Tasks.
 """
 
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
-from .models import UserProfile, Workspace, WorkspaceMember, Project, Task, TaskComment, ActivityLog
+from .models import (
+    UserProfile, Workspace, WorkspaceMember, Project, Task, TaskComment, ActivityLog,
+    Post, PostComment, Like, Follow
+)
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
+    followers_count = serializers.ReadOnlyField()
+    following_count = serializers.ReadOnlyField()
+    posts_count = serializers.ReadOnlyField()
+
     class Meta:
         model = UserProfile
-        fields = ['avatar_url', 'job_title', 'department', 'bio', 'phone', 'created_at', 'updated_at']
+        fields = [
+            'avatar_url', 'job_title', 'department', 'bio', 'phone',
+            'website', 'github_url', 'followers_count', 'following_count', 'posts_count',
+            'created_at', 'updated_at'
+        ]
 
 
 class UserPublicSerializer(serializers.ModelSerializer):
     profile = UserProfileSerializer(read_only=True)
+    is_following = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'profile']
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'profile', 'is_following']
+
+    def get_is_following(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated or request.user == obj:
+            return False
+        return Follow.objects.filter(follower=request.user, following=obj).exists()
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -69,6 +87,71 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise serializers.ValidationError("Current password is incorrect.")
         return value
 
+
+# ==============================================================================
+# SOCIAL NETWORK / POSTS & COMMENTS SERIALIZERS
+# ==============================================================================
+
+class PostCommentSerializer(serializers.ModelSerializer):
+    author = UserPublicSerializer(read_only=True)
+
+    class Meta:
+        model = PostComment
+        fields = ['id', 'post', 'author', 'content', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'post', 'author', 'created_at', 'updated_at']
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        validated_data['author'] = request.user
+        return super().create(validated_data)
+
+
+class PostSerializer(serializers.ModelSerializer):
+    author = UserPublicSerializer(read_only=True)
+    likes_count = serializers.ReadOnlyField()
+    comments_count = serializers.ReadOnlyField()
+    is_liked = serializers.SerializerMethodField()
+    comments = PostCommentSerializer(source='post_comments', many=True, read_only=True)
+
+    class Meta:
+        model = Post
+        fields = [
+            'id', 'author', 'content', 'code_snippet', 'code_language',
+            'image_url', 'tags', 'likes_count', 'comments_count',
+            'is_liked', 'comments', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'author', 'created_at', 'updated_at']
+
+    def get_is_liked(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return False
+        return Like.objects.filter(user=request.user, post=obj).exists()
+
+    def validate_content(self, value):
+        val = value.strip()
+        if not val:
+            raise serializers.ValidationError("Post content cannot be empty.")
+        return val
+
+    def create(self, validated_data):
+        request = self.context.get('request')
+        validated_data['author'] = request.user
+        return super().create(validated_data)
+
+
+class FollowSerializer(serializers.ModelSerializer):
+    follower = UserPublicSerializer(read_only=True)
+    following = UserPublicSerializer(read_only=True)
+
+    class Meta:
+        model = Follow
+        fields = ['id', 'follower', 'following', 'created_at']
+
+
+# ==============================================================================
+# WORKSPACES & PROJECTS SERIALIZERS
+# ==============================================================================
 
 class WorkspaceMemberSerializer(serializers.ModelSerializer):
     user = UserPublicSerializer(read_only=True)
@@ -133,7 +216,6 @@ class WorkspaceSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         request = self.context.get('request')
         workspace = Workspace.objects.create(owner=request.user, **validated_data)
-        # Create OWNER membership automatically
         WorkspaceMember.objects.create(workspace=workspace, user=request.user, role=WorkspaceMember.ROLE_OWNER)
         return workspace
 

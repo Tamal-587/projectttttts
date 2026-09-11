@@ -1,6 +1,6 @@
 """
-Database models for CodeAlpha_TaskFlow.
-Defines normalized relational schema with strict foreign keys, enums, constraints and helper methods.
+Database models for CodeAlpha Full Stack Platform.
+Includes Social Network (Posts, Comments, Likes, Follows) + Agile Projects & Workspaces.
 """
 
 from django.db import models
@@ -17,11 +17,25 @@ class UserProfile(models.Model):
     department = models.CharField(max_length=120, blank=True, default='Engineering')
     bio = models.TextField(blank=True, default='')
     phone = models.CharField(max_length=30, blank=True, default='')
+    website = models.CharField(max_length=200, blank=True, default='')
+    github_url = models.CharField(max_length=200, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.user.username}'s Profile"
+
+    @property
+    def followers_count(self):
+        return self.user.follower_relations.count()
+
+    @property
+    def following_count(self):
+        return self.user.following_relations.count()
+
+    @property
+    def posts_count(self):
+        return self.user.posts.count()
 
 
 @receiver(post_save, sender=User)
@@ -32,6 +46,83 @@ def create_or_update_user_profile(sender, instance, created, **kwargs):
         if hasattr(instance, 'profile'):
             instance.profile.save()
 
+
+# ==============================================================================
+# SOCIAL NETWORK / DEVELOPER COMMUNITY MODELS
+# ==============================================================================
+
+class Follow(models.Model):
+    follower = models.ForeignKey(User, on_delete=models.CASCADE, related_name='following_relations')
+    following = models.ForeignKey(User, on_delete=models.CASCADE, related_name='follower_relations')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['follower', 'following'], name='unique_follow_relation')
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.follower.username} follows {self.following.username}"
+
+
+class Post(models.Model):
+    author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='posts')
+    content = models.TextField()
+    code_snippet = models.TextField(blank=True, default='')
+    code_language = models.CharField(max_length=50, blank=True, default='javascript')
+    image_url = models.CharField(max_length=500, blank=True, default='')
+    tags = models.CharField(max_length=255, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Post by {self.author.username} on {self.created_at.strftime('%Y-%m-%d')}"
+
+    @property
+    def likes_count(self):
+        return self.likes.count()
+
+    @property
+    def comments_count(self):
+        return self.post_comments.count()
+
+
+class Like(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='post_likes')
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='likes')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['user', 'post'], name='unique_post_like')
+        ]
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.user.username} liked post {self.post.id}"
+
+
+class PostComment(models.Model):
+    post = models.ForeignKey(Post, on_delete=models.CASCADE, related_name='post_comments')
+    author = models.ForeignKey(User, on_delete=models.CASCADE, related_name='post_comments')
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"Comment by {self.author.username} on post {self.post.id}"
+
+
+# ==============================================================================
+# WORKSPACES & PROJECTS MODELS
+# ==============================================================================
 
 class Workspace(models.Model):
     name = models.CharField(max_length=100)
@@ -102,7 +193,7 @@ class Project(models.Model):
 
     workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='projects')
     name = models.CharField(max_length=150)
-    key = models.CharField(max_length=10)  # E.g. "ALP", "CORE"
+    key = models.CharField(max_length=10)
     description = models.TextField(blank=True, default='')
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
     start_date = models.DateField(null=True, blank=True)
@@ -182,7 +273,6 @@ class Task(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.pk and self.task_number == 1:
-            # Calculate next auto-increment task number for this project
             last_task = Task.objects.filter(project=self.project).order_by('-task_number').first()
             if last_task:
                 self.task_number = last_task.task_number + 1
@@ -212,8 +302,9 @@ class ActivityLog(models.Model):
     ACTION_MEMBER_ADDED = 'MEMBER_ADDED'
     ACTION_MEMBER_REMOVED = 'MEMBER_REMOVED'
     ACTION_COMMENT_ADDED = 'COMMENT_ADDED'
+    ACTION_POST_CREATED = 'POST_CREATED'
 
-    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, related_name='activities')
+    workspace = models.ForeignKey(Workspace, on_delete=models.CASCADE, null=True, blank=True, related_name='activities')
     project = models.ForeignKey(Project, on_delete=models.SET_NULL, null=True, blank=True, related_name='activities')
     user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='activities')
     action = models.CharField(max_length=50)

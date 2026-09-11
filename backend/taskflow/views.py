@@ -1,12 +1,14 @@
 """
-REST API Views and ViewSets for CodeAlpha_TaskFlow.
-Handles Authentication, Workspaces, Projects, Tasks, Comments, and Analytics.
+REST API Views and ViewSets for CodeAlpha Full Stack Application.
+Supports Developer Social Network (Feed, Posts, Likes, Comments, Follow/Unfollow, User Profiles)
+and Agile Workspace Management (Workspaces, Projects, Tasks).
 """
 
 from rest_framework import viewsets, status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
@@ -15,12 +17,14 @@ from django.db.models import Count, Q
 from django.utils import timezone
 
 from .models import (
-    UserProfile, Workspace, WorkspaceMember, Project, Task, TaskComment, ActivityLog
+    UserProfile, Workspace, WorkspaceMember, Project, Task, TaskComment, ActivityLog,
+    Post, PostComment, Like, Follow
 )
 from .serializers import (
     UserPublicSerializer, RegisterSerializer, ChangePasswordSerializer, UserProfileSerializer,
     WorkspaceSerializer, WorkspaceMemberSerializer, ProjectSerializer,
-    TaskSerializer, TaskStatusUpdateSerializer, TaskCommentSerializer, ActivityLogSerializer
+    TaskSerializer, TaskStatusUpdateSerializer, TaskCommentSerializer, ActivityLogSerializer,
+    PostSerializer, PostCommentSerializer, FollowSerializer
 )
 from .permissions import (
     IsWorkspaceMember, IsWorkspaceAdminOrOwner, IsWorkspaceOwner, CanManageTask,
@@ -60,7 +64,7 @@ class RegisterView(APIView):
             return Response({
                 'success': True,
                 'message': 'Registration successful.',
-                'user': UserPublicSerializer(user).data,
+                'user': UserPublicSerializer(user, context={'request': request}).data,
                 'tokens': {
                     'refresh': str(refresh),
                     'access': str(refresh.access_token),
@@ -82,7 +86,6 @@ class LoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Allow login via either username or email
         user = None
         if '@' in username_or_email:
             matched_user = User.objects.filter(email__iexact=username_or_email).first()
@@ -107,7 +110,7 @@ class LoginView(APIView):
         return Response({
             'success': True,
             'message': 'Login successful.',
-            'user': UserPublicSerializer(user).data,
+            'user': UserPublicSerializer(user, context={'request': request}).data,
             'tokens': {
                 'refresh': str(refresh),
                 'access': str(refresh.access_token),
@@ -119,7 +122,7 @@ class CurrentUserView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        serializer = UserPublicSerializer(request.user)
+        serializer = UserPublicSerializer(request.user, context={'request': request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request):
@@ -143,7 +146,7 @@ class CurrentUserView(APIView):
         profile_serializer = UserProfileSerializer(profile, data=request.data, partial=True)
         if profile_serializer.is_valid():
             profile_serializer.save()
-            return Response(UserPublicSerializer(user).data, status=status.HTTP_200_OK)
+            return Response(UserPublicSerializer(user, context={'request': request}).data, status=status.HTTP_200_OK)
 
         return Response(profile_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -161,7 +164,169 @@ class ChangePasswordView(APIView):
 
 
 # ==============================================================================
-# WORKSPACES & MEMBERS VIEWS
+# USER DIRECTORY & FOLLOW/UNFOLLOW VIEWS
+# ==============================================================================
+
+class UserViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = User.objects.filter(is_active=True).select_related('profile')
+    serializer_class = UserPublicSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'username'
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(
+                Q(username__icontains=search) |
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search) |
+                Q(profile__job_title__icontains=search)
+            )
+        suggest = self.request.query_params.get('suggest')
+        if suggest:
+            # Exclude current user and already followed users
+            following_ids = Follow.objects.filter(follower=self.request.user).values_list('following_id', flat=True)
+            qs = qs.exclude(id=self.request.user.id).exclude(id__in=following_ids)
+        return qs
+
+    @action(detail=True, methods=['post'], url_path='follow')
+    def follow_toggle(self, request, username=None):
+        target_user = self.get_object()
+        if target_user == request.user:
+            return Response({'detail': 'You cannot follow yourself.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        follow_relation = Follow.objects.filter(follower=request.user, following=target_user).first()
+        if follow_relation:
+            follow_relation.delete()
+            is_following = False
+            message = f"You unfollowed {target_user.username}."
+        else:
+            Follow.objects.create(follower=request.user, following=target_user)
+            is_following = True
+            message = f"You are now following {target_user.username}."
+
+        followers_count = target_user.follower_relations.count()
+        return Response({
+            'success': True,
+            'is_following': is_following,
+            'followers_count': followers_count,
+            'message': message,
+        })
+
+
+# ==============================================================================
+# POSTS, LIKES & COMMENTS VIEWS
+# ==============================================================================
+
+class PostViewSet(viewsets.ModelViewSet):
+    serializer_class = PostSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = Post.objects.all().select_related('author', 'author__profile').prefetch_related('likes', 'post_comments', 'post_comments__author', 'post_comments__author__profile')
+
+        feed_type = self.request.query_params.get('feed')
+        if feed_type == 'home':
+            # Posts by users current user follows + user's own posts
+            following_ids = list(Follow.objects.filter(follower=user).values_list('following_id', flat=True))
+            following_ids.append(user.id)
+            qs = qs.filter(author_id__in=following_ids)
+
+        author_param = self.request.query_params.get('author')
+        if author_param:
+            if author_param.isdigit():
+                qs = qs.filter(author_id=author_param)
+            else:
+                qs = qs.filter(author__username__iexact=author_param)
+
+        tag = self.request.query_params.get('tag')
+        if tag:
+            qs = qs.filter(tags__icontains=tag)
+
+        search = self.request.query_params.get('search')
+        if search:
+            qs = qs.filter(
+                Q(content__icontains=search) |
+                Q(tags__icontains=search) |
+                Q(author__username__icontains=search)
+            )
+
+        return qs.order_by('-created_at')
+
+    def perform_create(self, serializer):
+        serializer.save(author=self.request.user)
+
+    def perform_destroy(self, instance):
+        if instance.author != self.request.user and not self.request.user.is_staff:
+            raise PermissionDenied("You can only delete your own posts.")
+        instance.delete()
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+        if instance.author != self.request.user and not self.request.user.is_staff:
+            raise PermissionDenied("You can only edit your own posts.")
+        serializer.save()
+
+    @action(detail=True, methods=['post'], url_path='like')
+    def like_toggle(self, request, pk=None):
+        post = self.get_object()
+        existing_like = Like.objects.filter(user=request.user, post=post).first()
+
+        if existing_like:
+            existing_like.delete()
+            is_liked = False
+            message = "Post unliked."
+        else:
+            Like.objects.create(user=request.user, post=post)
+            is_liked = True
+            message = "Post liked."
+
+        likes_count = Like.objects.filter(post=post).count()
+
+        return Response({
+            'success': True,
+            'is_liked': is_liked,
+            'likes_count': likes_count,
+            'message': message,
+        })
+
+    @action(detail=True, methods=['get', 'post'], url_path='comments')
+    def comments(self, request, pk=None):
+        post = self.get_object()
+
+        if request.method == 'GET':
+            comments = post.post_comments.select_related('author', 'author__profile').all()
+            serializer = PostCommentSerializer(comments, many=True, context={'request': request})
+            return Response(serializer.data)
+
+        if request.method == 'POST':
+            serializer = PostCommentSerializer(data=request.data, context={'request': request})
+            if serializer.is_valid():
+                comment = serializer.save(author=request.user, post=post)
+                return Response(
+                    PostCommentSerializer(comment, context={'request': request}).data,
+                    status=status.HTTP_201_CREATED
+                )
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PostCommentViewSet(viewsets.ModelViewSet):
+    serializer_class = PostCommentSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        return PostComment.objects.select_related('author', 'author__profile', 'post').all()
+
+    def perform_destroy(self, instance):
+        if instance.author != self.request.user and instance.post.author != self.request.user and not self.request.user.is_staff:
+            raise PermissionDenied("You cannot delete this comment.")
+        instance.delete()
+
+
+# ==============================================================================
+# WORKSPACES & PROJECTS VIEWS (Existing Agile Platform)
 # ==============================================================================
 
 class WorkspaceViewSet(viewsets.ModelViewSet):
@@ -205,7 +370,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
         if request.method == 'GET':
             members = workspace.memberships.select_related('user', 'user__profile').all()
-            serializer = WorkspaceMemberSerializer(members, many=True)
+            serializer = WorkspaceMemberSerializer(members, many=True, context={'request': request})
             return Response(serializer.data)
 
         if request.method == 'POST':
@@ -224,7 +389,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                     entity_id=member.id,
                     summary=f"Added {member.user.username} as {member.role} to workspace."
                 )
-                return Response(WorkspaceMemberSerializer(member).data, status=status.HTTP_201_CREATED)
+                return Response(WorkspaceMemberSerializer(member, context={'request': request}).data, status=status.HTTP_201_CREATED)
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['patch', 'delete'], url_path='members/(?P<member_id>[^/.]+)')
@@ -246,7 +411,7 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
                 return Response({'detail': 'Invalid role choice.'}, status=status.HTTP_400_BAD_REQUEST)
             member.role = new_role
             member.save()
-            return Response(WorkspaceMemberSerializer(member).data)
+            return Response(WorkspaceMemberSerializer(member, context={'request': request}).data)
 
         if request.method == 'DELETE':
             username = member.user.username
@@ -289,7 +454,6 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
 
         completion_rate = int((done_tasks / total_tasks) * 100) if total_tasks > 0 else 0
 
-        # Assigned to me
         my_tasks = tasks.filter(assignee=request.user)
         my_pending = my_tasks.exclude(status=Task.STATUS_DONE).count()
 
@@ -332,13 +496,9 @@ class WorkspaceViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'Access denied.'}, status=status.HTTP_403_FORBIDDEN)
 
         activities = workspace.activities.select_related('user', 'project', 'user__profile').all()[:25]
-        serializer = ActivityLogSerializer(activities, many=True)
+        serializer = ActivityLogSerializer(activities, many=True, context={'request': request})
         return Response(serializer.data)
 
-
-# ==============================================================================
-# PROJECTS VIEWS
-# ==============================================================================
 
 class ProjectViewSet(viewsets.ModelViewSet):
     serializer_class = ProjectSerializer
@@ -402,10 +562,6 @@ class ProjectViewSet(viewsets.ModelViewSet):
         )
         instance.delete()
 
-
-# ==============================================================================
-# TASKS VIEWS
-# ==============================================================================
 
 class TaskViewSet(viewsets.ModelViewSet):
     serializer_class = TaskSerializer
@@ -481,7 +637,6 @@ class TaskViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         task_before = self.get_object()
         old_status = task_before.status
-        old_assignee = task_before.assignee
 
         task = serializer.save()
         workspace = task.project.workspace
@@ -545,12 +700,8 @@ class TaskViewSet(viewsets.ModelViewSet):
             summary=f"Moved {task.identifier} from {old_status} to {new_status}."
         )
 
-        return Response(TaskSerializer(task).data)
+        return Response(TaskSerializer(task, context={'request': request}).data)
 
-
-# ==============================================================================
-# COMMENTS VIEWS
-# ==============================================================================
 
 class TaskCommentViewSet(viewsets.ModelViewSet):
     serializer_class = TaskCommentSerializer

@@ -1,6 +1,6 @@
 """
-Django management command to seed realistic demo data for CodeAlpha_TaskFlow.
-Creates demo team members, a collaborative workspace, projects, tasks, comments, and activity audit logs.
+Django management command to seed realistic demo data for CodeAlpha Developer Social & TaskFlow Platform.
+Creates demo team members, follow relations, developer posts, likes, comments, workspace, projects, and sprint tasks.
 """
 
 from datetime import timedelta
@@ -8,15 +8,16 @@ from django.core.management.base import BaseCommand
 from django.contrib.auth.models import User
 from django.utils import timezone
 from taskflow.models import (
-    UserProfile, Workspace, WorkspaceMember, Project, Task, TaskComment, ActivityLog
+    UserProfile, Workspace, WorkspaceMember, Project, Task, TaskComment, ActivityLog,
+    Post, PostComment, Like, Follow
 )
 
 
 class Command(BaseCommand):
-    help = 'Seeds database with realistic demo team, projects, tasks, comments and audit logs.'
+    help = 'Seeds database with realistic demo team, posts, likes, comments, follows, projects, and tasks.'
 
     def handle(self, *args, **options):
-        self.stdout.write(self.style.NOTICE("Seeding CodeAlpha_TaskFlow demo data..."))
+        self.stdout.write(self.style.NOTICE("Seeding CodeAlpha demo data..."))
 
         # 1. Create Demo Users
         users_data = [
@@ -29,7 +30,9 @@ class Command(BaseCommand):
                 'title': 'Lead Software Architect',
                 'dept': 'Engineering',
                 'avatar': 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-                'bio': 'Passionate full-stack developer focusing on distributed systems and clean architectures.'
+                'bio': 'Passionate full-stack developer focusing on distributed systems and clean architectures.',
+                'website': 'https://alexvance.dev',
+                'github': 'https://github.com/alexvance'
             },
             {
                 'username': 'sophia',
@@ -40,7 +43,9 @@ class Command(BaseCommand):
                 'title': 'Senior Frontend Engineer',
                 'dept': 'Product Design & UI',
                 'avatar': 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-                'bio': 'Obsessed with micro-interactions, responsive accessibility, and performance optimization.'
+                'bio': 'Obsessed with micro-interactions, responsive accessibility, and performance optimization.',
+                'website': 'https://sophialin.design',
+                'github': 'https://github.com/sophialin'
             },
             {
                 'username': 'marcus',
@@ -51,7 +56,9 @@ class Command(BaseCommand):
                 'title': 'Backend Specialist',
                 'dept': 'Core Systems',
                 'avatar': 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-                'bio': 'Database tuning, high-throughput REST APIs, and authentication security enthusiast.'
+                'bio': 'Database tuning, high-throughput REST APIs, and authentication security enthusiast.',
+                'website': 'https://brody-systems.io',
+                'github': 'https://github.com/marcusbrody'
             },
             {
                 'username': 'elena',
@@ -62,7 +69,9 @@ class Command(BaseCommand):
                 'title': 'DevOps & QA Engineer',
                 'dept': 'Infrastructure',
                 'avatar': 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
-                'bio': 'Continuous integration, containerization, and zero-defect QA automation advocate.'
+                'bio': 'Continuous integration, containerization, and zero-defect QA automation advocate.',
+                'website': 'https://rostova-ops.tech',
+                'github': 'https://github.com/elenarostova'
             }
         ]
 
@@ -86,6 +95,8 @@ class Command(BaseCommand):
             profile.department = udata['dept']
             profile.avatar_url = udata['avatar']
             profile.bio = udata['bio']
+            profile.website = udata['website']
+            profile.github_url = udata['github']
             profile.save()
 
             created_users[udata['username']] = user
@@ -95,7 +106,90 @@ class Command(BaseCommand):
         marcus = created_users['marcus']
         elena = created_users['elena']
 
-        # 2. Create Workspace
+        # 2. Seed Follow Relations
+        Follow.objects.all().delete()
+        follows = [
+            (alex, sophia),
+            (alex, marcus),
+            (sophia, alex),
+            (sophia, elena),
+            (marcus, alex),
+            (marcus, sophia),
+            (elena, alex),
+            (elena, marcus),
+        ]
+        for follower, following in follows:
+            Follow.objects.get_or_create(follower=follower, following=following)
+
+        # 3. Seed Posts
+        Post.objects.all().delete()
+        posts_data = [
+            {
+                'author': alex,
+                'content': "Just wrapped up architecting JWT token rotation with automatic replay in Axios! Here's a clean snippet for attaching Bearer authorization and handling 401 refresh queues gracefully without interrupting user workflow.",
+                'code_snippet': "api.interceptors.response.use(\n  response => response,\n  async error => {\n    if (error.response?.status === 401 && !originalRequest._retry) {\n      originalRequest._retry = true;\n      const newAccess = await refreshAccessToken();\n      return api(originalRequest);\n    }\n    return Promise.reject(error);\n  }\n);",
+                'code_language': 'javascript',
+                'tags': 'react,django,jwt,architecture',
+                'image_url': 'https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=600&auto=format&fit=crop&q=80',
+            },
+            {
+                'author': sophia,
+                'content': "Exploring Tailwind CSS v4 in our React 19 client. The build speed is phenomenal — sub-second HMR with zero postcss config needed. Loving the sleek dark-mode slate/indigo color tokens for the new Sprint Board!",
+                'code_snippet': "@import \"tailwindcss\";\n\n@layer base {\n  body {\n    @apply bg-slate-950 text-slate-100 antialiased;\n  }\n}",
+                'code_language': 'css',
+                'tags': 'react,tailwind,frontend,ui',
+                'image_url': 'https://images.unsplash.com/photo-1507238691740-187a5b1d37b8?w=600&auto=format&fit=crop&q=80',
+            },
+            {
+                'author': marcus,
+                'content': "Tip of the day for Django REST Framework: Always use select_related on ForeignKeys and prefetch_related on ManyToMany/Reverse relations. Cut our endpoint payload response times down by 75% on large sprint boards.",
+                'code_snippet': "qs = Task.objects.select_related(\n    'project', 'assignee', 'reporter', 'assignee__profile'\n).prefetch_related('comments', 'comments__author')",
+                'code_language': 'python',
+                'tags': 'python,django,performance,sql',
+                'image_url': '',
+            },
+            {
+                'author': elena,
+                'content': "Set up a clean GitHub Actions pipeline with automated unit testing and Vite build verification. High confidence in zero regressions before any pull request hits production.",
+                'code_snippet': "name: CI Pipeline\non: [push, pull_request]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: python manage.py test\n      - run: npm run build",
+                'code_language': 'yaml',
+                'tags': 'devops,github,testing,automation',
+                'image_url': '',
+            }
+        ]
+
+        created_posts = []
+        for pdata in posts_data:
+            post = Post.objects.create(**pdata)
+            created_posts.append(post)
+
+        # 4. Seed Likes
+        Like.objects.all().delete()
+        likes_data = [
+            (sophia, created_posts[0]),
+            (marcus, created_posts[0]),
+            (elena, created_posts[0]),
+            (alex, created_posts[1]),
+            (marcus, created_posts[1]),
+            (alex, created_posts[2]),
+            (sophia, created_posts[2]),
+            (alex, created_posts[3]),
+        ]
+        for u, p in likes_data:
+            Like.objects.create(user=u, post=p)
+
+        # 5. Seed Post Comments
+        PostComment.objects.all().delete()
+        comments_data = [
+            (created_posts[0], sophia, "The seamless refresh on 401 is game-changing. No more unexpected session expirations!"),
+            (created_posts[0], marcus, "Clean interceptor design. Matches our SimpleJWT rotation settings perfectly."),
+            (created_posts[1], alex, "The slate-950 backdrop gives it a real Linear/Vercel feel. Beautiful contrast!"),
+            (created_posts[2], elena, "N+1 query bottlenecks are silent killers. Excellent optimization Marcus."),
+        ]
+        for p, u, content in comments_data:
+            PostComment.objects.create(post=p, author=u, content=content)
+
+        # 6. Seed Workspace & Projects
         workspace, _ = Workspace.objects.get_or_create(
             slug='codealpha-workspace',
             defaults={
@@ -108,7 +202,6 @@ class Command(BaseCommand):
         workspace.owner = alex
         workspace.save()
 
-        # Memberships
         memberships = [
             (alex, WorkspaceMember.ROLE_OWNER),
             (sophia, WorkspaceMember.ROLE_ADMIN),
@@ -124,7 +217,6 @@ class Command(BaseCommand):
             wm.role = role
             wm.save()
 
-        # 3. Create Projects
         p1, _ = Project.objects.get_or_create(
             workspace=workspace,
             key='ALPHA',
@@ -151,7 +243,6 @@ class Command(BaseCommand):
             }
         )
 
-        # 4. Clear and populate Tasks for project 1
         Task.objects.filter(project__in=[p1, p2]).delete()
 
         tasks_p1 = [
@@ -199,130 +290,12 @@ class Command(BaseCommand):
                 'estimated_hours': 10,
                 'order': 4
             },
-            {
-                'title': 'Conduct Automated API & Model Unit Tests',
-                'description': 'Write comprehensive test cases covering authentication flows, permission boundary checks, and task status transitions.',
-                'status': Task.STATUS_IN_REVIEW,
-                'priority': Task.PRIORITY_HIGH,
-                'assignee': elena,
-                'reporter': marcus,
-                'due_date': timezone.now().date() + timedelta(days=1),
-                'estimated_hours': 6,
-                'order': 5
-            },
-            {
-                'title': 'Build slide-over Task Detail Drawer with live comment thread',
-                'description': 'Create rich task inspector allowing team members to change status, adjust priority, reassign owners, and post instant comments.',
-                'status': Task.STATUS_TODO,
-                'priority': Task.PRIORITY_MEDIUM,
-                'assignee': sophia,
-                'reporter': alex,
-                'due_date': timezone.now().date() + timedelta(days=5),
-                'estimated_hours': 8,
-                'order': 6
-            },
-            {
-                'title': 'Optimize ORM queries with select_related & prefetch_related',
-                'description': 'Prevent N+1 query overhead across workspace members, projects, and task commenter relations.',
-                'status': Task.STATUS_TODO,
-                'priority': Task.PRIORITY_MEDIUM,
-                'assignee': marcus,
-                'reporter': alex,
-                'due_date': timezone.now().date() + timedelta(days=6),
-                'estimated_hours': 4,
-                'order': 7
-            },
-            {
-                'title': 'Integrate WebSocket or Server-Sent Events for live push alerts',
-                'description': 'Explore lightweight event dispatching for instant multi-user board synchronization.',
-                'status': Task.STATUS_BACKLOG,
-                'priority': Task.PRIORITY_LOW,
-                'assignee': alex,
-                'reporter': alex,
-                'due_date': timezone.now().date() + timedelta(days=14),
-                'estimated_hours': 20,
-                'order': 8
-            },
         ]
 
-        tasks_p2 = [
-            {
-                'title': 'Draft Dockerfile and multi-stage container build',
-                'description': 'Optimize production container image sizes with slim base images and clean asset compilation.',
-                'status': Task.STATUS_TODO,
-                'priority': Task.PRIORITY_HIGH,
-                'assignee': elena,
-                'reporter': alex,
-                'due_date': timezone.now().date() + timedelta(days=10),
-                'estimated_hours': 8,
-                'order': 1
-            },
-            {
-                'title': 'Configure GitHub Actions CI/CD Pipeline',
-                'description': 'Automated linting, backend test suite execution, and frontend Vite build verification on every pull request.',
-                'status': Task.STATUS_IN_PROGRESS,
-                'priority': Task.PRIORITY_URGENT,
-                'assignee': elena,
-                'reporter': alex,
-                'due_date': timezone.now().date() + timedelta(days=4),
-                'estimated_hours': 10,
-                'order': 2
-            }
-        ]
-
-        all_created_tasks = []
         for t_dict in tasks_p1:
-            task = Task.objects.create(project=p1, **t_dict)
-            all_created_tasks.append(task)
+            Task.objects.create(project=p1, **t_dict)
 
-        for t_dict in tasks_p2:
-            task = Task.objects.create(project=p2, **t_dict)
-            all_created_tasks.append(task)
-
-        # 5. Add Task Comments
-        if all_created_tasks:
-            t_jwt = all_created_tasks[1]  # JWT task
-            TaskComment.objects.create(
-                task=t_jwt,
-                author=alex,
-                content="Ensure the refresh token rotation is enabled and access token expiry is set to 60 minutes for security."
-            )
-            TaskComment.objects.create(
-                task=t_jwt,
-                author=marcus,
-                content="Completed! Added token refresh endpoint with Axios response interceptor that automatically replays pending requests."
-            )
-
-            t_kanban = all_created_tasks[2]  # Kanban task
-            TaskComment.objects.create(
-                task=t_kanban,
-                author=sophia,
-                content="Kanban layout looks slick! Working on optimistic UI updates so column transitions feel instantaneous."
-            )
-
-        # 6. Seed Activity Logs
-        ActivityLog.objects.filter(workspace=workspace).delete()
-        activities = [
-            (alex, ActivityLog.ACTION_PROJECT_CREATED, 'Project', p1.id, "Created project 'TaskFlow Platform v2.0' (ALPHA)."),
-            (alex, ActivityLog.ACTION_MEMBER_ADDED, 'WorkspaceMember', 2, "Added Sophia Lin as Admin to workspace."),
-            (alex, ActivityLog.ACTION_MEMBER_ADDED, 'WorkspaceMember', 3, "Added Marcus Brody as Member to workspace."),
-            (marcus, ActivityLog.ACTION_TASK_STATUS, 'Task', all_created_tasks[1].id, f"Completed {all_created_tasks[1].identifier}: 'Architect JWT Authentication'."),
-            (sophia, ActivityLog.ACTION_TASK_STATUS, 'Task', all_created_tasks[0].id, f"Completed {all_created_tasks[0].identifier}: 'Design high-converting SaaS landing'."),
-            (sophia, ActivityLog.ACTION_COMMENT_ADDED, 'Task', all_created_tasks[2].id, f"Commented on {all_created_tasks[2].identifier}."),
-        ]
-
-        for u, action_type, entity_type, entity_id, summary in activities:
-            ActivityLog.objects.create(
-                workspace=workspace,
-                project=p1,
-                user=u,
-                action=action_type,
-                entity_type=entity_type,
-                entity_id=entity_id,
-                summary=summary
-            )
-
-        self.stdout.write(self.style.SUCCESS("[OK] Successfully seeded CodeAlpha_TaskFlow demo data!"))
+        self.stdout.write(self.style.SUCCESS("[OK] Successfully seeded CodeAlpha demo data!"))
         self.stdout.write(self.style.SUCCESS("  Demo credentials:"))
         self.stdout.write(self.style.SUCCESS("  Admin: alex@codealpha.io / Password123!"))
         self.stdout.write(self.style.SUCCESS("  Team:  sophia@codealpha.io, marcus@codealpha.io / Password123!"))

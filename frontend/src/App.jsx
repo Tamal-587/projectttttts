@@ -5,6 +5,8 @@ import { useAuth } from './context/AuthContext';
 import AppLayout from './components/layout/AppLayout';
 import LoginPage from './pages/auth/LoginPage';
 import RegisterPage from './pages/auth/RegisterPage';
+import FeedPage from './pages/social/FeedPage';
+import UserProfilePage from './pages/social/UserProfilePage';
 import DashboardPage from './pages/dashboard/DashboardPage';
 import BoardPage from './pages/kanban/BoardPage';
 import AllTasksPage from './pages/tasks/AllTasksPage';
@@ -44,7 +46,7 @@ const PublicOnlyRoute = ({ children }) => {
   }
 
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/feed" replace />;
   }
 
   return children;
@@ -80,7 +82,9 @@ export function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route index element={<Navigate to="/feed" replace />} />
+        <Route path="feed" element={<FeedPage />} />
+        <Route path="profile/:username" element={<UserProfilePage />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="board" element={<BoardPage />} />
         <Route path="tasks" element={<AllTasksPage />} />

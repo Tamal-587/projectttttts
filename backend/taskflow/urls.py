@@ -1,5 +1,5 @@
 """
-API URL routes for CodeAlpha_TaskFlow.
+API URL routes for CodeAlpha Developer Social & TaskFlow Platform.
 """
 
 from django.urls import path, include
@@ -8,10 +8,17 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from .views import (
     RegisterView, LoginView, CurrentUserView, ChangePasswordView,
+    UserViewSet, PostViewSet, PostCommentViewSet,
     WorkspaceViewSet, ProjectViewSet, TaskViewSet, TaskCommentViewSet
 )
 
 router = DefaultRouter()
+# Social & Community routes
+router.register(r'users', UserViewSet, basename='user')
+router.register(r'posts', PostViewSet, basename='post')
+router.register(r'post-comments', PostCommentViewSet, basename='post-comment')
+
+# Workspace & Agile Project routes
 router.register(r'workspaces', WorkspaceViewSet, basename='workspace')
 router.register(r'projects', ProjectViewSet, basename='project')
 router.register(r'tasks', TaskViewSet, basename='task')

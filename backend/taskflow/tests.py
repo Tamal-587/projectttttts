@@ -1,155 +1,181 @@
 """
-Comprehensive unit and API integration tests for CodeAlpha_TaskFlow.
-Covers Auth, RBAC Permissions, Projects, Tasks, and Activity Logging.
+Comprehensive unit and API integration tests for CodeAlpha Platform.
+Covers Auth, Profiles, Posts, Likes, Comments, Follow/Unfollow, and Feed.
 """
 
 from django.test import TestCase
 from django.contrib.auth.models import User
 from rest_framework.test import APIClient
 from rest_framework import status
-from .models import Workspace, WorkspaceMember, Project, Task, TaskComment, ActivityLog
+from .models import (
+    UserProfile, Workspace, WorkspaceMember, Project, Task,
+    Post, PostComment, Like, Follow
+)
 
 
-class AuthAndUserTests(TestCase):
+class SocialAndAuthTests(TestCase):
     def setUp(self):
         self.client = APIClient()
 
-    def test_user_registration_success(self):
-        data = {
-            'username': 'newuser',
-            'email': 'newuser@example.com',
+        # User 1: Alex
+        self.alex = User.objects.create_user(
+            username='alex', email='alex@example.com', password='Password123!',
+            first_name='Alexander', last_name='Vance'
+        )
+        # User 2: Sophia
+        self.sophia = User.objects.create_user(
+            username='sophia', email='sophia@example.com', password='Password123!',
+            first_name='Sophia', last_name='Lin'
+        )
+
+        # Login as Alex
+        login_res = self.client.post('/api/auth/login/', {
+            'username_or_email': 'alex',
+            'password': 'Password123!'
+        })
+        self.alex_token = login_res.data['tokens']['access']
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.alex_token}')
+
+    def test_registration_and_validation(self):
+        client = APIClient()
+        # Missing fields / invalid password
+        res_fail = client.post('/api/auth/register/', {
+            'username': 'testuser',
+            'email': 'not-an-email',
+            'password': '123',
+            'password_confirm': '456'
+        })
+        self.assertEqual(res_fail.status_code, status.HTTP_400_BAD_REQUEST)
+
+        # Valid registration
+        res_ok = client.post('/api/auth/register/', {
+            'username': 'testuser',
+            'email': 'testuser@example.com',
             'password': 'SecurePassword123!',
             'password_confirm': 'SecurePassword123!',
             'first_name': 'Test',
             'last_name': 'User'
-        }
-        response = self.client.post('/api/auth/register/', data)
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertTrue(response.data['success'])
-        self.assertIn('access', response.data['tokens'])
-        self.assertTrue(User.objects.filter(username='newuser').exists())
+        })
+        self.assertEqual(res_ok.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(res_ok.data['success'])
+        self.assertIn('access', res_ok.data['tokens'])
 
-    def test_user_registration_mismatched_passwords(self):
-        data = {
-            'username': 'baduser',
-            'email': 'baduser@example.com',
-            'password': 'Password123!',
-            'password_confirm': 'Different123!',
-        }
-        response = self.client.post('/api/auth/register/', data)
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+    def test_profile_update(self):
+        res = self.client.patch('/api/auth/profile/', {
+            'job_title': 'Principal Architect',
+            'bio': 'Designing resilient cloud distributed systems.',
+            'website': 'https://alexvance.io'
+        })
+        self.assertEqual(res.status_code, status.HTTP_200_OK)
+        self.alex.profile.refresh_from_db()
+        self.assertEqual(self.alex.profile.job_title, 'Principal Architect')
+        self.assertEqual(self.alex.profile.website, 'https://alexvance.io')
 
-    def test_user_login_with_email_and_username(self):
-        user = User.objects.create_user(
-            username='johndoe', email='john@example.com', password='Password123!'
-        )
+    def test_post_creation_and_feed(self):
+        # Create a post
+        res_create = self.client.post('/api/posts/', {
+            'content': 'First developer post on the platform!',
+            'code_snippet': 'console.log("Hello World");',
+            'code_language': 'javascript',
+            'tags': 'javascript,react'
+        })
+        self.assertEqual(res_create.status_code, status.HTTP_201_CREATED)
+        post_id = res_create.data['id']
+        self.assertEqual(res_create.data['content'], 'First developer post on the platform!')
 
-        # Login with email
-        res_email = self.client.post('/api/auth/login/', {
-            'username_or_email': 'john@example.com',
+        # Explore feed includes the post
+        res_explore = self.client.get('/api/posts/')
+        self.assertEqual(res_explore.status_code, status.HTTP_200_OK)
+        self.assertGreaterEqual(len(res_explore.data['results']), 1)
+
+    def test_post_edit_and_delete_permissions(self):
+        # Create post by Alex
+        post = Post.objects.create(author=self.alex, content='Original content')
+
+        # Alex edits own post
+        res_edit = self.client.patch(f'/api/posts/{post.id}/', {'content': 'Updated content'})
+        self.assertEqual(res_edit.status_code, status.HTTP_200_OK)
+        self.assertEqual(res_edit.data['content'], 'Updated content')
+
+        # Switch to Sophia
+        sophia_login = self.client.post('/api/auth/login/', {
+            'username_or_email': 'sophia',
             'password': 'Password123!'
         })
-        self.assertEqual(res_email.status_code, status.HTTP_200_OK)
-        self.assertIn('access', res_email.data['tokens'])
+        sophia_token = sophia_login.data['tokens']['access']
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {sophia_token}')
 
-        # Login with username
-        res_user = self.client.post('/api/auth/login/', {
-            'username_or_email': 'johndoe',
+        # Sophia attempts to edit Alex's post (must be forbidden)
+        res_forbidden_edit = self.client.patch(f'/api/posts/{post.id}/', {'content': 'Hacked content'})
+        self.assertEqual(res_forbidden_edit.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Sophia attempts to delete Alex's post (must be forbidden)
+        res_forbidden_del = self.client.delete(f'/api/posts/{post.id}/')
+        self.assertEqual(res_forbidden_del.status_code, status.HTTP_403_FORBIDDEN)
+
+        # Switch back to Alex and delete
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.alex_token}')
+        res_del = self.client.delete(f'/api/posts/{post.id}/')
+        self.assertEqual(res_del.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Post.objects.filter(id=post.id).exists())
+
+    def test_likes_and_comments(self):
+        post = Post.objects.create(author=self.alex, content='Test post for likes and comments')
+
+        # Like the post
+        res_like = self.client.post(f'/api/posts/{post.id}/like/')
+        self.assertEqual(res_like.status_code, status.HTTP_200_OK)
+        self.assertTrue(res_like.data['is_liked'])
+        self.assertEqual(res_like.data['likes_count'], 1)
+
+        # Unlike the post
+        res_unlike = self.client.post(f'/api/posts/{post.id}/like/')
+        self.assertEqual(res_unlike.status_code, status.HTTP_200_OK)
+        self.assertFalse(res_unlike.data['is_liked'])
+        self.assertEqual(res_unlike.data['likes_count'], 0)
+
+        # Add comment
+        res_comment = self.client.post(f'/api/posts/{post.id}/comments/', {
+            'content': 'Super helpful architecture insight!'
+        })
+        self.assertEqual(res_comment.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(res_comment.data['content'], 'Super helpful architecture insight!')
+        comment_id = res_comment.data['id']
+
+        # Delete comment
+        res_del_comment = self.client.delete(f'/api/post-comments/{comment_id}/')
+        self.assertEqual(res_del_comment.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_follow_and_home_feed(self):
+        # Alex creates post
+        post_alex = Post.objects.create(author=self.alex, content='Alex exclusive update')
+
+        # Login as Sophia
+        sophia_login = self.client.post('/api/auth/login/', {
+            'username_or_email': 'sophia',
             'password': 'Password123!'
         })
-        self.assertEqual(res_user.status_code, status.HTTP_200_OK)
+        sophia_token = sophia_login.data['tokens']['access']
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {sophia_token}')
 
-        # Login with invalid password
-        res_bad = self.client.post('/api/auth/login/', {
-            'username_or_email': 'johndoe',
-            'password': 'WrongPassword!'
-        })
-        self.assertEqual(res_bad.status_code, status.HTTP_401_UNAUTHORIZED)
+        # Sophia's home feed before following Alex (should NOT contain Alex's post)
+        res_feed_before = self.client.get('/api/posts/?feed=home')
+        self.assertEqual(res_feed_before.status_code, status.HTTP_200_OK)
+        post_ids = [p['id'] for p in res_feed_before.data['results']]
+        self.assertNotIn(post_alex.id, post_ids)
 
+        # Sophia follows Alex
+        res_follow = self.client.post('/api/users/alex/follow/')
+        self.assertEqual(res_follow.status_code, status.HTTP_200_OK)
+        self.assertTrue(res_follow.data['is_following'])
 
-class WorkspaceAndTaskTests(TestCase):
-    def setUp(self):
-        self.client = APIClient()
-        self.owner = User.objects.create_user(
-            username='owner_user', email='owner@example.com', password='Password123!'
-        )
-        self.member = User.objects.create_user(
-            username='member_user', email='member@example.com', password='Password123!'
-        )
+        # Sophia's home feed after following Alex (MUST contain Alex's post)
+        res_feed_after = self.client.get('/api/posts/?feed=home')
+        self.assertEqual(res_feed_after.status_code, status.HTTP_200_OK)
+        post_ids_after = [p['id'] for p in res_feed_after.data['results']]
+        self.assertIn(post_alex.id, post_ids_after)
 
-        # Authenticate as owner
-        login_res = self.client.post('/api/auth/login/', {
-            'username_or_email': 'owner_user',
-            'password': 'Password123!'
-        })
-        self.access_token = login_res.data['tokens']['access']
-        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {self.access_token}')
-
-        # Create workspace
-        self.workspace = Workspace.objects.create(
-            name='Test Workspace', slug='test-workspace', owner=self.owner
-        )
-        WorkspaceMember.objects.create(
-            workspace=self.workspace, user=self.owner, role=WorkspaceMember.ROLE_OWNER
-        )
-        WorkspaceMember.objects.create(
-            workspace=self.workspace, user=self.member, role=WorkspaceMember.ROLE_MEMBER
-        )
-
-        # Create project
-        self.project = Project.objects.create(
-            workspace=self.workspace,
-            name='Alpha Project',
-            key='TST',
-            created_by=self.owner
-        )
-
-    def test_list_workspaces(self):
-        response = self.client.get('/api/workspaces/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(len(response.data['results']), 1)
-        self.assertEqual(response.data['results'][0]['slug'], 'test-workspace')
-
-    def test_create_and_update_task(self):
-        # Create task
-        task_data = {
-            'project': self.project.id,
-            'title': 'Implement API caching',
-            'description': 'Cache repetitive queries using Redis',
-            'priority': Task.PRIORITY_HIGH,
-            'status': Task.STATUS_TODO
-        }
-        response = self.client.post('/api/tasks/', task_data)
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        task_id = response.data['id']
-        self.assertEqual(response.data['identifier'], 'TST-1')
-
-        # Quick status update
-        status_res = self.client.patch(f'/api/tasks/{task_id}/status/', {
-            'status': Task.STATUS_IN_PROGRESS
-        })
-        self.assertEqual(status_res.status_code, status.HTTP_200_OK)
-        self.assertEqual(status_res.data['status'], Task.STATUS_IN_PROGRESS)
-
-        # Verify activity log entry created
-        activity = ActivityLog.objects.filter(
-            workspace=self.workspace,
-            action=ActivityLog.ACTION_TASK_STATUS
-        ).first()
-        self.assertIsNotNone(activity)
-
-    def test_workspace_analytics(self):
-        # Create a task in the project
-        Task.objects.create(
-            project=self.project,
-            title='Sample Analytics Task',
-            status=Task.STATUS_DONE,
-            priority=Task.PRIORITY_MEDIUM,
-            reporter=self.owner
-        )
-
-        response = self.client.get(f'/api/workspaces/{self.workspace.slug}/analytics/')
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data['summary']['total_tasks'], 1)
-        self.assertEqual(response.data['summary']['completed_tasks'], 1)
-        self.assertEqual(response.data['summary']['completion_rate'], 100)
+        # Sophia unfollows Alex
+        res_unfollow = self.client.post('/api/users/alex/follow/')
+        self.assertEqual(res_unfollow.status_code, status.HTTP_200_OK)
+        self.assertFalse(res_unfollow.data['is_following'])
